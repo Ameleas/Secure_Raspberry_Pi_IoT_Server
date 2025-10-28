@@ -1,3 +1,7 @@
+Detta är ett skolprojekt i kursen "Datorkommunikation Nätverk och konnerktivitet". Jag ber om ursäkt för att denna README inte är direkt givande, tiden rann ut och jag lät chatGPT skapa det och det kan ju bli lite sisådär.
+
+Here it goes: 
+
 # Secure Raspberry Pi IoT Server
 
 A secure IoT server built for Raspberry Pi using MQTT over TLS/SSL, designed to ensure encrypted communication between sensors (e.g., ESP32 with PIR) and a central broker.
