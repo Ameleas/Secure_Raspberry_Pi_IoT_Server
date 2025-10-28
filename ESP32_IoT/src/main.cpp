@@ -16,6 +16,8 @@ PubSubClient client(espClient);
 unsigned long lastMsg = 0;
 char msg[MSG_BUFFER_SIZE];
 
+bool lastMotionState = false;
+
 void setup_wifi() {
   delay(100);
   Serial.println();
@@ -87,7 +89,7 @@ void setup() {
   Serial.println("mTLS configured");
 }
 
-void loop() {
+  void loop() {
   if (!client.connected()) {
     reconnect();
   }
@@ -96,15 +98,11 @@ void loop() {
   StaticJsonDocument<128> doc;
   char output[55];
   
-  long now = millis();
-  if (now - lastMsg > 5000) {
-    lastMsg = now;
-    
-    // Ta bort kommentar för att använda riktig sensor:
-   bool motionDetected = digitalRead(PIR_PIN);
-    
-    // Simulering utan hårdvara:
-    // bool motionDetected = random(0, 2);
+  // Ta bort kommentar för att använda riktig sensor:
+  bool motionDetected = digitalRead(PIR_PIN);
+
+  if (motionDetected != lastMotionState) {
+    lastMotionState = motionDetected;
     
     doc["motion"] = motionDetected;
     
@@ -113,4 +111,5 @@ void loop() {
     client.publish("/home/sensors", output);
     Serial.println("Sent via mTLS");
   }
+  delay(200); // Debounce delay
 }
