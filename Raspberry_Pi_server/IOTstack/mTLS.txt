@@ -1,0 +1,238 @@
+Dessa Certifikat behövs:
+CA (Certificate Authority)
+├── ca.crt (publikt certifikat)
+└── ca.key (privat nyckel - används bara för att signera)
+
+Server (Mosquitto)
+├── server.crt (publikt certifikat, signerat av CA)
+└── server.key (privat nyckel)
+
+Client (ESP32)
+├── esp32-client.crt (publikt certifikat, signerat av CA)
+└── esp32-client.key (privat nyckel)
+
+Client (Node-RED)
+├── nodered-client.crt (publikt certifikat, signerat av CA)
+└── nodered-client.key (privat nyckel)
+```
+
+## **Steg-för-steg: När ESP32 ansluter till Mosquitto**
+
+### **Steg 1: TCP-anslutning**
+```
+ESP32 → Mosquitto: Hej, jag vill ansluta till port 8883
+Mosquitto → ESP32: OK, vi startar TLS-handskakning
+```
+
+### **Steg 2: Server presenterar sitt certifikat**
+```
+Mosquitto → ESP32: Här är mitt certifikat (server.crt)
+server.crt innehåller:
+
+Server-identitet (CN='DIN SERVERS IP-ADDRESS')
+Serverns publika nyckel
+CA:s signatur (kryptografisk "stämpel")
+Giltighetstid (10 år)
+
+Steg 3: ESP32 validerar servern
+ESP32 använder ca.crt för att validera:
+cppespClient.setCACert(ca_cert);  // "Jag litar på denna CA"
+```
+
+**Valideringsprocessen:**
+
+1. **Kolla signatur:**
+```
+   ESP32: Är server.crt verkligen signerat av min CA?
+   → Dekryptera CA:s signatur med ca.crt:s publika nyckel
+   → Jämför med hash av server.crt
+   → ✓ Matchar! Servern är legitim
+```
+
+2. **Kolla giltighetstid:**
+```
+   ESP32: Är certifikatet fortfarande giltigt?
+   → Not Before: 2025-10-28  // den dag du skapade certifikatet
+   → Not After: 2035-10-28   // giltighets tid 10 år
+   → Idag: 2025-10-28
+   → ✓ Giltigt!
+```
+
+3. **Kolla hostname (CN):**
+```
+   ESP32: Ansluter jag till rätt server?
+   → Certifikat säger: CN='DIN SERVERS IP-ADDRESS'
+   → Jag ansluter till: 'DIN SERVERS IP-ADDRESS'
+   → ✓ Matchar!
+```
+
+**Om något misslyckas:**
+```
+❌ Signatur matchar inte → "unable to get local issuer certificate"
+❌ Utgånget certifikat → "certificate has expired"
+❌ Fel hostname → "hostname mismatch"
+→ Anslutning NEKAS
+```
+
+### **Steg 4: Mosquitto begär klient-certifikat**
+
+Sätt `require_certificate true` i mosquitto.conf:
+```
+Mosquitto → ESP32: Visa mig DITT certifikat!
+Steg 5: ESP32 presenterar sitt certifikat
+cppespClient.setCertificate(client_cert);  // Mitt publika certifikat
+espClient.setPrivateKey(client_key);    // Min privata nyckel
+```
+```
+ESP32 → Mosquitto: Här är mitt certifikat (esp32-client.crt)
+Steg 6: Mosquitto validerar klienten
+Mosquitto använder ca.crt för att validera ESP32:
+confcafile /mosquitto/certs/ca.crt
+require_certificate true
+```
+
+**Valideringsprocessen:**
+
+1. **Kolla signatur:**
+```
+   Mosquitto: Är esp32-client.crt signerat av min CA?
+   → Dekryptera CA:s signatur med ca.crt:s publika nyckel
+   → Jämför med hash av esp32-client.crt
+   → ✓ Matchar! Klienten är legitim
+```
+
+2. **Kolla giltighetstid:**
+```
+   Mosquitto: Är klient-certifikatet giltigt?
+   → ✓ Giltigt!
+
+Autentisera användare:
+
+conf   use_identity_as_username true
+```
+```
+   Mosquitto: Vem är du?
+   → Certifikat säger: CN=ESP32-Client
+   → Du är nu inloggad som "CN=ESP32-Client"
+```
+
+### **Steg 7: Kryptografisk bevisning**
+
+**Mosquitto testar att ESP32 verkligen har den privata nyckeln:**
+```
+Mosquitto → ESP32: Kryptera denna slumptext med din privata nyckel
+ESP32 → Mosquitto: [krypterad text]
+Mosquitto: Dekrypterar med esp32-client.crt:s publika nyckel
+→ ✓ Texten matchar! ESP32 har verkligen nyckeln
+```
+
+Detta bevisar att ESP32 inte bara stulit certifikatet, utan också har den privata nyckeln.
+
+### **Steg 8: Säker session etableras**
+```
+✓ Server validerad
+✓ Klient validerad  
+✓ Bägge har bevisat sin identitet
+→ Krypterad MQTT-session startar
+```
+
+Nu genereras en **session key** som används för att kryptera all data:
+```
+ESP32 ←[AES-256 krypterad data]→ Mosquitto
+```
+
+## **Varför är detta säkert?**
+
+### **Mutual TLS (mTLS) = Dubbel validering**
+
+**Vanlig TLS (som HTTPS):**
+- ✓ Klient validerar server
+- ✗ Server validerar INTE klient
+
+**mTLS (vad vi använder):**
+- ✓ Klient validerar server (ESP32 → Mosquitto)
+- ✓ Server validerar klient (Mosquitto → ESP32)
+
+### **Vad skyddar det mot?**
+
+1. **Man-in-the-Middle attacker:**
+```
+   Hackare försöker lura ESP32:
+   ESP32 → Hackare (fejkar Mosquitto)
+   
+   ❌ Hackaren har inte server.crt signerat av vår CA
+   ❌ ESP32 vägrar ansluta
+```
+
+2. **Stulna credentials:**
+```
+   Hackare har läst din WiFi-lösenord och vet MQTT-IP
+   
+   ❌ Hackaren har inte esp32-client.crt + esp32-client.key
+   ❌ Mosquitto vägrar anslutning
+```
+
+3. **Avlyssning:**
+```
+   All data är krypterad med AES-256
+   
+   ❌ Hackare kan se krypterad data men inte läsa den
+```
+
+## **Varför behövs både .crt och .key?**
+
+**Publikt certifikat (.crt):**
+- Som ett ID-kort
+- Alla får se det
+- Innehåller identitet + publik nyckel
+- Kan skickas öppet
+
+**Privat nyckel (.key):**
+- Som ditt lösenord/fingeravtryck
+- INGEN får se den (måste hållas hemlig!)
+- Bevisar att du äger certifikatet
+- Används för att kryptera/dekryptera
+
+**Analogt:**
+```
+.crt = Ditt körkort (alla får se det)
+.key = Din underskrift (bara du kan göra den)
+```
+
+## **Praktiskt exempel i din stack:**
+```
+ESP32 publicerar motion-data:
+1. ESP32 krypterar: {"motion": true}
+2. Skickar via TLS-krypterad tunnel
+3. Mosquitto dekrypterar och tar emot
+4. Node-RED ansluter med nodered-client.crt
+5. Mosquitto validerar Node-RED
+6. Node-RED får data via krypterad tunnel
+7. Sparar i InfluxDB
+```
+
+**Utan certifikat (osäker):**
+```
+WiFi-avlyssnare kan se: {"motion": true}
+Granne kan skicka fejkdata till din Mosquitto
+```
+
+**Med mTLS:**
+```
+✓ All data krypterad
+✓ Bara enheter med giltiga certifikat kan ansluta
+✓ Du vet exakt vilken enhet som skickar data
+```
+
+
+## **FELSÖKNING:**
+```
+Det kan vara lite uppförsbacke att få till initialt.
+ - Var noga med sökvägar, se till att certifikaten 
+   verkligen ligger på din angivna sökväg i docker-
+   compose, mosquitto.conf och nodered. 
+ - Använd rätt IP-adress. När du skapar en IOT-server
+   med mTLS låser du den också till en specifik IP-adress.
+   Mao låser du den till ett visst nätverk.
+ - Kontrollera och bekräfta Read/write rättigheter 
+   (ro/rw).
